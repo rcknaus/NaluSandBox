@@ -4,13 +4,34 @@
 /*  in the file, LICENSE, which is located in the top-level Nalu          */
 /*  directory structure                                                   */
 /*------------------------------------------------------------------------*/
-#ifndef TensorProductBasis_h
-#define TensorProductBasis_h
+#ifndef LagrangeBasis_h
+#define LagrangeBasis_h
 
 #include <vector>
 
 namespace sierra{
 namespace naluUnit{
+
+class Lagrange1D
+{
+public:
+  Lagrange1D(const double* nodeLocs, int order);
+
+  Lagrange1D(std::vector<double> nodeLocs);
+
+  Lagrange1D(int order);
+
+  virtual ~Lagrange1D();
+
+  double interpolation_weight(double x, unsigned nodeNumber) const;
+
+  double derivative_weight(double x, unsigned nodeNumber) const;
+
+private:
+  void set_lagrange_weights();
+  std::vector<double> lagrangeWeights_;
+  std::vector<double> nodeLocs_;
+};
 
 class LagrangeBasis
 {
@@ -20,9 +41,7 @@ public:
     const std::vector<double>& nodeLocs
   );
 
-  virtual ~LagrangeBasis() {};
-
-  void set_lagrange_weights();
+  virtual ~LagrangeBasis();
 
   std::vector<double> eval_basis_weights(
     const std::vector<double>& intgLoc) const;
@@ -36,15 +55,13 @@ public:
     const unsigned* nodes,
     unsigned derivativeDirection
   ) const;
+
   double tensor_lagrange_interpolant(unsigned dimension, const double* x, const unsigned* nodes) const;
-  double lagrange_1D(double x, unsigned nodeNumber) const;
-  double lagrange_deriv_1D(double x, unsigned nodeNumber) const;
 
   std::vector<std::vector<unsigned>> indicesMap_;
+  const Lagrange1D basis1D_;
   unsigned numNodes1D_;
-  std::vector<double> nodeLocs_;
   const unsigned dimension_;
-  std::vector<double> lagrangeWeights_;
 };
 
 

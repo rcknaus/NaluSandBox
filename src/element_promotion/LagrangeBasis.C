@@ -5,16 +5,93 @@
 /*  directory structure                                                   */
 /*------------------------------------------------------------------------*/
 #include <element_promotion/LagrangeBasis.h>
-
 #include <stk_util/environment/ReportHandler.hpp>
+#include <element_promotion/QuadratureRule.h>
 
 #include <algorithm>
 #include <cmath>
 #include <memory>
 #include <string>
+#include <tuple>
 
 namespace sierra{
 namespace naluUnit{
+
+//==========================================================================
+// Class Definition
+//==========================================================================
+// Lagrange1D - Provides the set of weights for interpolating and taking
+// derivatives 1-dimensional element in the normal ordering (left-to-right)
+// TODO(rcknaus): implement a more optimized method for interpolating data
+// at a non-integration point location
+//===========================================================================
+Lagrange1D::Lagrange1D(int poly_order)
+{
+  std::tie(nodeLocs_, std::ignore) = gauss_lobatto_legendre_rule(poly_order+1);
+  set_lagrange_weights();
+}
+//--------------------------------------------------------------------------
+Lagrange1D::Lagrange1D(const double* nodeLocs, int order)
+{
+  nodeLocs_.resize(order+1);
+  for (int j = 0; j < order + 1; ++j) {
+    nodeLocs_[j] = nodeLocs[j];
+  }
+  set_lagrange_weights();
+}
+//--------------------------------------------------------------------------
+Lagrange1D::Lagrange1D(std::vector<double> nodeLocs)
+: nodeLocs_(std::move(nodeLocs))
+{
+  set_lagrange_weights();
+}
+//--------------------------------------------------------------------------
+Lagrange1D::~Lagrange1D() = default;
+//--------------------------------------------------------------------------
+void
+Lagrange1D::set_lagrange_weights()
+{
+  const auto numNodes = nodeLocs_.size();
+  lagrangeWeights_.assign(numNodes,1.0);
+  for (unsigned i = 0; i < numNodes; ++i) {
+    for (unsigned j = 0; j < numNodes; ++j) {
+      if ( i != j ) {
+        lagrangeWeights_[i] *= (nodeLocs_[i]-nodeLocs_[j]);
+      }
+    }
+    lagrangeWeights_[i] = 1.0 / lagrangeWeights_[i];
+  }
+}
+//--------------------------------------------------------------------------
+double
+Lagrange1D::interpolation_weight(double x, unsigned nodeNumber) const
+{
+  double numerator = 1.0;
+  for (unsigned j = 0; j < nodeLocs_.size(); ++j) {
+    if (j != nodeNumber) {
+      numerator *= (x - nodeLocs_[j]);
+    }
+  }
+  return (numerator * lagrangeWeights_[nodeNumber]);
+}
+//--------------------------------------------------------------------------
+double
+Lagrange1D::derivative_weight(double x, unsigned nodeNumber) const
+{
+  double outer = 0.0;
+  for (unsigned j = 0; j < nodeLocs_.size(); ++j) {
+    if (j != nodeNumber) {
+      double inner = 1.0;
+      for (unsigned i = 0; i < nodeLocs_.size(); ++i) {
+        if (i != j && i != nodeNumber) {
+          inner *= (x - nodeLocs_[i]);
+        }
+      }
+      outer += inner;
+    }
+  }
+  return (outer * lagrangeWeights_[nodeNumber]);
+}
 
 //==========================================================================
 // Class Definition
@@ -28,29 +105,16 @@ LagrangeBasis::LagrangeBasis(
   std::vector<std::vector<unsigned>>&  indicesMap,
   const std::vector<double>& nodeLocs)
   :  indicesMap_(indicesMap),
+     basis1D_(nodeLocs),
      numNodes1D_(nodeLocs.size()),
-     nodeLocs_(nodeLocs),
      dimension_(indicesMap[0].size())
 {
   for (auto& indices : indicesMap) {
     ThrowRequire(indices.size() == dimension_);
   }
-  set_lagrange_weights();
 }
 //--------------------------------------------------------------------------
-void
-LagrangeBasis::set_lagrange_weights()
-{
-  lagrangeWeights_.assign(numNodes1D_,1.0);
-  for (unsigned i = 0; i < numNodes1D_; ++i) {
-    for (unsigned j = 0; j < numNodes1D_; ++j) {
-      if ( i != j ) {
-        lagrangeWeights_[i] *= (nodeLocs_[i]-nodeLocs_[j]);
-      }
-    }
-    lagrangeWeights_[i] = 1.0 / lagrangeWeights_[i];
-  }
-}
+LagrangeBasis::~LagrangeBasis() = default;
 //--------------------------------------------------------------------------
 std::vector<double>
 LagrangeBasis::eval_basis_weights(
@@ -108,7 +172,7 @@ LagrangeBasis::tensor_lagrange_interpolant(
 {
   double interpolant_weight = 1.0;
   for (unsigned j = 0; j < dimension; ++j) {
-    interpolant_weight *= lagrange_1D(x[j], nodes[j]);
+    interpolant_weight *= basis1D_.interpolation_weight(x[j], nodes[j]);
   }
   return interpolant_weight;
 }
@@ -123,43 +187,13 @@ LagrangeBasis::tensor_lagrange_derivative(
   double derivativeWeight = 1.0;
   for (unsigned j = 0; j < dimension; ++j) {
     if (j == derivativeDirection) {
-      derivativeWeight *= lagrange_deriv_1D(x[j], nodes[j]);
+      derivativeWeight *= basis1D_.derivative_weight(x[j], nodes[j]);
     }
     else {
-      derivativeWeight *= lagrange_1D(x[j], nodes[j]);
+      derivativeWeight *= basis1D_.interpolation_weight(x[j], nodes[j]);
     }
   }
   return derivativeWeight;
-}
-//--------------------------------------------------------------------------
-double
-LagrangeBasis::lagrange_1D(double x, unsigned nodeNumber) const
-{
-  double numerator = 1.0;
-  for (unsigned j = 0; j < numNodes1D_; ++j) {
-    if (j != nodeNumber) {
-      numerator *= (x - nodeLocs_[j]);
-    }
-  }
-  return (numerator * lagrangeWeights_[nodeNumber]);
-}
-//--------------------------------------------------------------------------
-double
-LagrangeBasis::lagrange_deriv_1D(double x, unsigned nodeNumber) const
-{
-  double outer = 0.0;
-  for (unsigned j = 0; j < numNodes1D_; ++j) {
-    if (j != nodeNumber) {
-      double inner = 1.0;
-      for (unsigned i = 0; i < numNodes1D_; ++i) {
-        if (i != j && i != nodeNumber) {
-          inner *= (x - nodeLocs_[i]);
-        }
-      }
-      outer += inner;
-    }
-  }
-  return (outer * lagrangeWeights_[nodeNumber]);
 }
 
 }  // namespace naluUnit
