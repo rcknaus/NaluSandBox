@@ -758,7 +758,6 @@ SuperElement::consolidate_node_ids()
   bulkData_->modification_begin();
 
   for ( iterM = edgeNodeSharingOffProcMap_.begin(); iterM != edgeNodeSharingOffProcMap_.end(); ++iterM ) {
-    const int originProc = iterM->first;
     const std::vector<EntityNodeSharing> receiveBuffer = iterM->second;
     for ( size_t k = 0; k < receiveBuffer.size(); ++k) {
       stk::mesh::EntityId theId = receiveBuffer[k].globalNodeId_;
@@ -1346,7 +1345,7 @@ SuperElement::initialize_fields()
   // now check nodes in the mesh based on super element part (same selector as above)
   size_t totalNumNodes = 0;
   size_t goldTotalNumNodes = 21;
-  int goldNodalOrder[21] = {9, 10, 12, 13, 14, 15, 16, 17, 18, 19,
+  stk::mesh::EntityId goldNodalOrder[21] = {9, 10, 12, 13, 14, 15, 16, 17, 18, 19,
                             20, 21, 11, 4, 5, 7, 8, 2, 1, 3, 6};
  
   int goldNodalOrderCount = 0;

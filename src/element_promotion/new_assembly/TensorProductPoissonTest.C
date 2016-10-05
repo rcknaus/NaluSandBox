@@ -106,7 +106,7 @@ TensorProductPoissonTest::execute()
 
   auto timeAssemblyStart = clock_type::now();
   numRuns_ = outputTiming_ ? 1000 : 1; // number of runs for averaging timing data
-  for (unsigned j = 0; j < numRuns_; ++j) {
+  for (int j = 0; j < numRuns_; ++j) {
     lhs_.putScalar(0.0); rhs_.putScalar(0.0);
     assemble_poisson(order_);
   }
