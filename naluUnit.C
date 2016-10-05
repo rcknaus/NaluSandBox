@@ -171,9 +171,9 @@ int main( int argc, char ** argv )
   }
 
   if ( doQuadTensorProductPoisson ) {
-    int polyOrder = 1;
+    int polyOrder = 10;
     bool printTiming = true;
-    sierra::naluUnit::TensorProductPoissonTest("test_meshes/tquad4_4.g", 10, printTiming).execute();
+    sierra::naluUnit::TensorProductPoissonTest("test_meshes/tquad4_4.g", polyOrder, printTiming).execute();
   }
 
   if ( doQuadPoissonSGL  ) {

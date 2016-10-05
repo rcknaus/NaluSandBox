@@ -69,14 +69,7 @@ PromoteElement::promote_elements(
   auto basePartSelector = stk::mesh::selectUnion(baseParts);
   auto nodeRequests = create_child_node_requests(elemDescription_, mesh, basePartSelector);
   determine_child_ordinals(elemDescription_,mesh, nodeRequests);
-
-  auto& rootNodePart =
-      mesh.mesh_meta_data().
-      get_cell_topology_root_part(stk::mesh::get_cell_topology(stk::topology::NODE)
-  );
-
-  batch_create_child_nodes(elemDescription_, mesh, nodeRequests, rootNodePart);
-
+  batch_create_child_nodes(elemDescription_, mesh, nodeRequests);
   auto elemNodeMap = make_elem_node_relations_map(elemDescription_, mesh, basePartSelector, nodeRequests);
   populate_upward_relations_map(elemDescription_, mesh, basePartSelector, nodeRequests);
 
@@ -183,8 +176,7 @@ void
 PromoteElement::batch_create_child_nodes(
   const ElementDescription& elemDescription,
   stk::mesh::BulkData& mesh,
-  NodeRequests& requests,
-  stk::mesh::Part& rootNodePart) const
+  NodeRequests& requests) const
 {
   size_t num_nodes_requested = count_requested_nodes(requests);
   std::vector<stk::mesh::EntityId> available_node_ids(num_nodes_requested);
@@ -206,7 +198,7 @@ PromoteElement::batch_create_child_nodes(
   }
 
   for (auto& request : requests) {
-    request.set_node_entity_for_request(mesh, rootNodePart);
+    request.set_node_entity_for_request(mesh);
   }
 }
 //--------------------------------------------------------------------------
@@ -699,20 +691,18 @@ PromoteElement::create_boundary_face_elements(
     stk::mesh::selectUnion(mesh_parts))
   );
 
-  // allot new face-ranked ids for the superface
   std::vector<stk::mesh::EntityId> availableFaceIds(numNewFace);
   mesh.generate_new_ids(side_rank, numNewFace, availableFaceIds);
 
-  // declare super face copies for each base face element
+  stk::mesh::PartVector soloFacePart(1);
+
   size_t faceIdIndex = 0;
   for (const auto* ipart : mesh_parts) {
     for (const stk::mesh::Part* subset : ipart->subsets()) {
-      if ( subset->topology().rank() == side_rank
-       && !subset->topology().is_superface()
-       && !subset->topology().is_superedge()) {
-        auto* superFacePart =
+      if ( subset->topology().rank() == side_rank && !subset->topology().is_super_topology()) {
+       soloFacePart[0] =
             super_subset_part(*subset, elemDescription_.nodesPerElement, elemDescription_.nodesPerFace);
-        ThrowRequire(superFacePart  != nullptr);
+        ThrowRequire(soloFacePart[0]  != nullptr);
 
         const auto& buckets = mesh.get_buckets(side_rank, *subset);
         for (const auto* ib : buckets) {
@@ -722,30 +712,19 @@ PromoteElement::create_boundary_face_elements(
           for (stk::mesh::Bucket::size_type k = 0; k < length; ++k) {
             const auto face = b[k];
 
-            // create the super
-            stk::mesh::Entity superFace =
-                mesh.declare_entity(side_rank, availableFaceIds[faceIdIndex], *superFacePart);
+            stk::mesh::Entity superFace = mesh.declare_solo_side(availableFaceIds[faceIdIndex], soloFacePart);
 
-            // get super element associated with base element face
             const auto superElem = exposedFaceToSuperElemMap.at(face);
 
-            // get nodes for that element
             const auto* elem_node_rels = mesh.begin_nodes(superElem);
-
             ThrowAssert(mesh.num_elements(face) == 1);
 
-            // get the ordinal of the face
             const auto face_ordinal = mesh.begin_element_ordinals(face)[0];
-
-            // method to return the node ordinals associated with an element's face
             const auto* ordinals = elemDescription_.side_ordinals_for_face(face_ordinal);
 
-            // attach nodes to the new face
             for (unsigned j = 0; j < elemDescription_.nodesPerFace; ++j) {
               mesh.declare_relation(superFace, elem_node_rels[ordinals[j]], j);
             }
-
-            // attach the face to its parent element
             mesh.declare_relation(superElem, superFace, face_ordinal);
             ++faceIdIndex;
           }
@@ -883,17 +862,14 @@ PromoteElement::ChildNodeRequest::ChildNodeRequest(
 //--------------------------------------------------------------------------
 void
 PromoteElement::ChildNodeRequest::set_node_entity_for_request(
-  stk::mesh::BulkData& mesh,
-  stk::mesh::Part& rootPart) const
+  stk::mesh::BulkData& mesh) const
 {
   // Creates the actual stk nodes on the parts indicated by
   for (unsigned j = 0; j < children_.size(); ++j) {
     auto& idProcPairs = procGIdPairsFromAllProcs_[j];
     std::sort(idProcPairs.begin(), idProcPairs.end());
 
-    children_[j] = mesh.declare_entity(
-      stk::topology::NODE_RANK, get_id_for_child(j), rootPart
-    );
+    children_[j] = mesh.declare_entity(stk::topology::NODE_RANK, get_id_for_child(j));
 
     for (auto& idProcPair : idProcPairs) {
       if (idProcPair.first != mesh.parallel_rank()) {

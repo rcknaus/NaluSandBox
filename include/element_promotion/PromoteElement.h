@@ -84,10 +84,7 @@ private:
       return parentIds_ == other.parentIds_;
     }
     void determine_sharing_procs(const stk::mesh::BulkData& mesh) const;
-    void set_node_entity_for_request(
-      stk::mesh::BulkData& mesh,
-      stk::mesh::Part& rootPart
-    ) const;
+    void set_node_entity_for_request(stk::mesh::BulkData& mesh) const;
     void add_shared_elem(const stk::mesh::Entity& elem) const;
 
     std::vector<size_t> determine_child_node_ordinals(
@@ -198,9 +195,7 @@ private:
   void batch_create_child_nodes(
     const ElementDescription& elemDescription,
     stk::mesh::BulkData & mesh,
-    NodeRequests& requests,
-    stk::mesh::Part& rootNodePart
-  ) const;
+    NodeRequests& requests) const;
 
   void parallel_communicate_ids(
     const ElementDescription& elemDescription,
