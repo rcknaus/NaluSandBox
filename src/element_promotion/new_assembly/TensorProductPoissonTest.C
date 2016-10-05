@@ -11,7 +11,7 @@
 #include <element_promotion/MasterElement.h>
 #include <element_promotion/MasterElementHO.h>
 #include <element_promotion/new_assembly/HighOrderLaplacianQuad.h>
-#include <element_promotion/new_assembly/HighOrderGeometry.h>
+#include <element_promotion/new_assembly/HighOrderGeometryQuad.h>
 #include <element_promotion/PromoteElement.h>
 #include <element_promotion/PromotedPartHelper.h>
 #include <element_promotion/PromotedElementIO.h>
@@ -19,7 +19,7 @@
 #include <Teuchos_LAPACK.hpp>
 #include <Teuchos_SerialDenseMatrix.hpp>
 #include <TestHelper.h>
-#include <KokkosInterface.h>
+#include <TopologyViews.h>
 
 #include <stk_io/StkMeshIoBroker.hpp>
 #include <stk_mesh/base/Field.hpp>
@@ -47,9 +47,12 @@
 #include <utility>
 #include <limits>
 #include <stdexcept>
+#include <chrono>
 
 namespace sierra{
 namespace naluUnit{
+
+  using clock_type = std::chrono::high_resolution_clock;
 
 //==========================================================================
 // Class Definition
@@ -64,6 +67,10 @@ TensorProductPoissonTest::TensorProductPoissonTest(
   : meshName_(std::move(meshName)),
     order_(order),
     outputTiming_(true),
+    totalTime_(0.0),
+    timeSetup_(0.0),
+    timeAssembly_(0.0),
+    timeSolveAndUpdate_(0.0),
     timeMainLoop_(0.0),
     timeMetric_(0.0),
     timeLHS_(0.0),
@@ -80,71 +87,36 @@ TensorProductPoissonTest::TensorProductPoissonTest(
 //--------------------------------------------------------------------------
 TensorProductPoissonTest::~TensorProductPoissonTest() = default;
 //--------------------------------------------------------------------------
+double get_duration(clock_type::time_point end, clock_type::time_point begin)
+{
+  return (1.0e-9*std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count());
+}
+//--------------------------------------------------------------------------
 void
 TensorProductPoissonTest::execute()
 {
-  if (NaluEnv::self().pSize_ > 1) {
-    // test is serial
-    return;
-  }
+  if (NaluEnv::self().pSize_ > 1) { return; }   // test is serial
 
-  double totalTime = -MPI_Wtime();
-
-  double timeSetup = -MPI_Wtime();
+  auto totalTimeStart = clock_type::now();
   setup_mesh();
   output_banner();
   initialize_fields();
   set_output_fields();
   initialize_matrix();
-  timeSetup += MPI_Wtime();
 
-  // number of runs for averaging timing data
-  double timeAssembly = -MPI_Wtime();
-  unsigned numRuns = outputTiming_ ? 1000 : 1;
-  for (unsigned j = 0; j < numRuns; ++j) {
-    lhs_.putScalar(0.0);
-    rhs_.putScalar(0.0);
+  auto timeAssemblyStart = clock_type::now();
+  numRuns_ = outputTiming_ ? 1000 : 1; // number of runs for averaging timing data
+  for (unsigned j = 0; j < numRuns_; ++j) {
+    lhs_.putScalar(0.0); rhs_.putScalar(0.0);
     assemble_poisson(order_);
   }
-  timeAssembly += MPI_Wtime();
+  timeAssembly_ = get_duration(clock_type::now(), timeAssemblyStart);
 
-  double timeSolveAndUpdate = -MPI_Wtime();
   apply_dirichlet();
   solve_matrix_equation();
   update_field();
-  timeSolveAndUpdate += MPI_Wtime();
+  totalTime_ = get_duration(clock_type::now(), totalTimeStart);
 
-  totalTime += MPI_Wtime();
-
-  if (outputTiming_) {
-    // average time
-    timeMainLoop_ /= countAssemblies_;
-    timeMetric_ /= countAssemblies_;
-    timeLHS_ /= countAssemblies_;
-    timeResidual_ /= countAssemblies_;
-    timeGather_ /= countAssemblies_;
-    timeVolumeMetric_ /= countAssemblies_;
-    timeVolumeSource_ /= countAssemblies_;
-
-    static const int NUM_TIMERS = 11;
-    const double timers[NUM_TIMERS] = {
-        timeSetup, timeAssembly,
-        timeMainLoop_, timeGather_,
-        timeMetric_, timeLHS_,
-        timeVolumeMetric_, timeVolumeSource_,
-        timeResidual_, timeSolveAndUpdate,  totalTime
-    };
-    const char* timer_names[NUM_TIMERS] = {
-        "setup", "matrix assembly (run 1000 times)",
-        "avg. element assembly", "avg. gather",
-        "avg. surface metric computation", "avg. lhs assembly",
-        "avg. volume metric computation", "avg. volumetric source computation",
-        "avg. residual evaluation", "solve and update",
-        "Total"
-    };
-
-    stk::print_timers(&timers[0], &timer_names[0], NUM_TIMERS);
-  }
   output_results();
 }
 //--------------------------------------------------------------------------
@@ -184,98 +156,111 @@ TensorProductPoissonTest::assemble_poisson(unsigned pOrder)
   }
 }
 //--------------------------------------------------------------------------
+template <typename TopoView>
+stk::mesh::BucketVector filter_buckets(stk::mesh::BucketVector buckets)
+{
+  // a bucket filter for super element topologies.  Just check the dimension and
+  // number of nodes is correct
+  std::remove_if(buckets.begin(), buckets.end(), [&](const stk::mesh::Bucket* ib)->bool {
+    const auto& topo = ib->topology();
+
+    bool is_super = topo.is_super_topology();
+    bool is_correct_dim = topo.dimension() == TopoView::dim;
+    bool is_correct_order = topo.num_nodes() == TopoView::nodesPerElement;
+
+    return !(is_super && is_correct_dim && is_correct_order);
+  });
+  return buckets;
+}
+//--------------------------------------------------------------------------
+template <typename TopoView, typename Container>
+typename TopoView::connectivity_array
+copy_node_map_to_topo_view(Container& map)
+{
+  typename TopoView::connectivity_array nodeMap("nmap");
+  for (unsigned j = 0; j < TopoView::nodes1D; ++j) {
+    for (unsigned i = 0; i < TopoView::nodes1D; ++i) {
+      nodeMap(j,i) = map[TopoView::nodes1D * j + i];
+    }
+  }
+  return nodeMap;
+}
+//--------------------------------------------------------------------------
 template <unsigned poly_order> void
 TensorProductPoissonTest::assemble_poisson()
 {
   // Poisson equation assembly algorithm for quadrilateral elements
 
-  // definitions
-  constexpr unsigned dim = 2;
-  constexpr unsigned nodes1D = poly_order+1;
-  constexpr unsigned nodesPerElement = (poly_order+1)*(poly_order+1);
+  // Kokkos array views for this algorithm
+  using TopoView = QuadViews<poly_order>;
+  auto mat = CoefficientMatrices<poly_order>();
+  auto nodeMap = copy_node_map_to_topo_view<TopoView>(elem_->nodeMap);
 
-  // Operations for assembly
-  auto laplaceOps = HighOrderLaplacianQuad<poly_order>();
-  auto geomOps = HighOrderGeometryQuad<poly_order>();
+  typename TopoView::nodal_vector_array coordinates("element nodal coordinates");
+  typename TopoView::nodal_scalar_array scalar("scalar field data");
+  typename TopoView::nodal_scalar_array nodalSource("nodal source field");
 
-  // scratch
-  typename QuadViews<poly_order>::matrix_array       lhs("left-hand side");
-  typename QuadViews<poly_order>::nodal_scalar_array rhs("right-hand side");
-  typename QuadViews<poly_order>::scs_tensor_array   metric_laplace("grid metric for laplacian");
-  typename QuadViews<poly_order>::nodal_vector_array coordinates("element nodal coordinates");
-  typename QuadViews<poly_order>::nodal_scalar_array metric_vol("Det(J) evaluated at the nodes");
-  typename QuadViews<poly_order>::nodal_scalar_array scalar("scalar field data");
-  typename QuadViews<poly_order>::nodal_scalar_array nodalSource("nodal source field");
+  auto selector = stk::mesh::selectUnion(superPartVector_);
+  const auto& buckets = filter_buckets<TopoView>(bulkData_->get_buckets(stk::topology::ELEMENT_RANK, selector));
 
-  // map from default node-ordering to tensor product node-ordering
-  const std::vector<unsigned>& nodeMap = elem_->nodeMap;
+  typename TopoView::scs_tensor_array metric_laplace("A^T J^-1");
+  typename TopoView::matrix_array lhs("lhs");
+  typename TopoView::nodal_scalar_array rhs("rhs");
+  typename TopoView::nodal_scalar_array metric_vol("|J|");
 
-  const auto& buckets =
-      bulkData_->get_buckets(stk::topology::ELEMENT_RANK, stk::mesh::selectUnion(superPartVector_));
-
+  auto timeMainStart = clock_type::now();
   for (const auto* ib : buckets) {
-    const auto& b = *ib;
-    const auto length = b.size();
-    for (size_t k = 0; k < length; ++k) {
-      double timeMainStart = MPI_Wtime();
-
-      // zero arrays
-      Kokkos::deep_copy(lhs, 0.0);
-      Kokkos::deep_copy(rhs, 0.0);
-
-       // gather data
-      double timeGatherStart = MPI_Wtime();
-      stk::mesh::Entity const * node_rels = b.begin_nodes(k);
-      for (unsigned j = 0; j < nodes1D; ++j) {
-        for (unsigned i = 0; i < nodes1D; ++i) {
-          stk::mesh::Entity node = node_rels[nodeMap[i + nodes1D * j]];
+    for (size_t k = 0; k < ib->size(); ++k) {
+      auto timeGatherStart = clock_type::now();
+      const auto* node_rels = ib->begin_nodes(k);
+      for (unsigned j = 0; j <TopoView::nodes1D; ++j) {
+        for (unsigned i = 0; i < TopoView::nodes1D; ++i) {
+          stk::mesh::Entity node = node_rels[nodeMap(j,i)];
           scalar(j, i) = *stk::mesh::field_data(*q_, node);
           nodalSource(j, i) = *stk::mesh::field_data(*source_, node);
           const double * coords = stk::mesh::field_data(*coordinates_, node);
-          for (unsigned k = 0; k < dim; ++k) {
+          for (unsigned k = 0; k < TopoView::dim; ++k) {
             coordinates(k, j, i) = coords[k];
           }
         }
       }
-      timeGather_ += MPI_Wtime() - timeGatherStart;
+      timeGather_ += get_duration(clock_type::now(), timeGatherStart);
+
+      Kokkos::deep_copy(lhs, 0.0);
+      Kokkos::deep_copy(rhs, 0.0);
 
       // compute the metric for this element
-      double timeMetricStart = MPI_Wtime();
-      geomOps.diffusion_metric_linear(coordinates, metric_laplace);
-      timeMetric_ += MPI_Wtime() - timeMetricStart;
-
-      // compute source term metric (det J)
-      double timeVolumeMetricStart = MPI_Wtime();
-      geomOps.volume_metric_linear(coordinates, metric_vol);
-      timeVolumeMetric_ += MPI_Wtime() - timeVolumeMetricStart;
+      auto timeMetricStart = clock_type::now();
+      HighOrderMetrics::compute_diffusion_metric_linear(mat, coordinates, metric_laplace);
+      timeMetric_ += get_duration(clock_type::now(), timeMetricStart);
 
       // compute left-hand side
-      double timeLHSStart = MPI_Wtime();
-      laplaceOps.elemental_laplacian_matrix(metric_laplace, lhs);
-      timeLHS_ += MPI_Wtime() - timeLHSStart;
-
-      // compute volumetric source and add to rhs
-      double timeVolumeSourceStart = MPI_Wtime();
-      laplaceOps.volumetric_source(metric_vol, nodalSource, rhs);
-      timeVolumeSource_ += MPI_Wtime() - timeVolumeSourceStart;
+      auto timeLHSStart = clock_type::now();
+      TensorAssembly::add_elemental_laplacian_matrix(mat, metric_laplace, lhs);
+      timeLHS_ += get_duration(clock_type::now(), timeLHSStart);
 
       // compute action of left-hand side and subtract from rhs to form residual
-      double timeRHSStart = MPI_Wtime();
-      laplaceOps.elemental_laplacian_action(metric_laplace, scalar, rhs);
-      timeResidual_ += MPI_Wtime() - timeRHSStart;
+      auto timeRHSStart = clock_type::now();
+      TensorAssembly::add_elemental_laplacian_action(mat, metric_laplace, scalar, rhs);
+      timeResidual_ += get_duration(clock_type::now(), timeRHSStart);
 
-      // sum into the global matrix -- not timed since this is just to test correctness
-      // and the actual "sumInto" will be very different
-      size_t indices[nodesPerElement];
-      for (unsigned j = 0; j < nodesPerElement; ++j) {
-        indices[j] = rowMap_.at(node_rels[nodeMap[j]]);
-      }
-      sum_into_global(indices, lhs.data(), rhs.data(), nodesPerElement);
+      // compute source term metric (det J)
+      auto timeVolumeMetricStart = clock_type::now();
+      HighOrderMetrics::compute_volume_metric_linear(mat, coordinates, metric_vol);
+      timeVolumeMetric_ += get_duration(clock_type::now(), timeVolumeMetricStart);
 
-      timeMainLoop_ += MPI_Wtime() - timeMainStart;
+      // compute volumetric source and add to rhs
+      auto timeVolumeSourceStart = clock_type::now();
+      TensorAssembly::add_volumetric_source(mat, metric_vol, nodalSource, rhs);
+      timeVolumeSource_ += get_duration(clock_type::now(), timeVolumeSourceStart);
+
+      // sum into the global matrix -- not timed since this is only to check correctness
+      sum_into_global(node_rels, nodeMap.data(), lhs.data(), rhs.data(), TopoView::nodesPerElement);
+
       ++countAssemblies_;
     }
   }
+  timeMainLoop_ += get_duration(clock_type::now(), timeMainStart);
 }
 //--------------------------------------------------------------------------
 void
@@ -438,15 +423,18 @@ TensorProductPoissonTest::solve_matrix_equation()
 //--------------------------------------------------------------------------
 void
 TensorProductPoissonTest::sum_into_global(
-  const size_t* indices,
+  const stk::mesh::Entity* node_rels,
+  const int* nodeMap,
   double* lhs_local,
   double* rhs_local,
   int length)
 {
   for (int j = 0; j < length; ++j) {
-    rhs_(indices[j]) += rhs_local[j];
+    auto idj = rowMap_.at(node_rels[nodeMap[j]]);
+    rhs_(idj) += rhs_local[j];
     for (int i = 0; i < length; ++i) {
-      lhs_(indices[j], indices[i]) += lhs_local[i + length * j];
+      auto idi = rowMap_.at(node_rels[nodeMap[i]]);
+      lhs_(idj, idi) += lhs_local[i + length * j];
     }
   }
 }
@@ -585,6 +573,37 @@ TensorProductPoissonTest::initialize_fields()
 void
 TensorProductPoissonTest::output_results()
 {
+  if (outputTiming_) {
+    // average time
+    timeMainLoop_ /= countAssemblies_;
+    timeMetric_ /= countAssemblies_;
+    timeLHS_ /= countAssemblies_;
+    timeResidual_ /= countAssemblies_;
+    timeGather_ /= countAssemblies_;
+    timeVolumeMetric_ /= countAssemblies_;
+    timeVolumeSource_ /= countAssemblies_;
+
+    constexpr int NUM_TIMERS = 9;
+    const double timers[NUM_TIMERS] = {
+        timeAssembly_, timeMainLoop_,
+        timeGather_, timeMetric_,
+        timeLHS_,timeVolumeMetric_,
+        timeVolumeSource_, timeResidual_,
+        totalTime_
+    };
+
+    std::string runString = "matrix assembly (run " + std::to_string(numRuns_) + " times)";
+    const char* timer_names[NUM_TIMERS] = {
+        runString.c_str(),
+        "avg. element assembly", "avg. gather",
+        "avg. surface metric computation", "avg. lhs assembly",
+        "avg. volume metric computation", "avg. volumetric source computation",
+        "avg. residual evaluation",
+        "Total"
+    };
+    stk::print_timers(&timers[0], &timer_names[0], NUM_TIMERS);
+  }
+
   output_result("Poisson", check_solution());
   promoteIO_->write_database_data(0.0);
   NaluEnv::self().naluOutputP0() << "-------------------------"  << std::endl;

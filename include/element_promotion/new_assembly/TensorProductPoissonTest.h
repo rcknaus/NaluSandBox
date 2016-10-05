@@ -77,14 +77,26 @@ private:
   void initialize_matrix();
   void assemble_poisson(unsigned pOrder);
   template<unsigned poly_order> void assemble_poisson();
-  void sum_into_global(const size_t* indices, double* lhs_local, double* rhs_local, int length);
+  void sum_into_global(
+    const stk::mesh::Entity* node_rels,
+    const int* nodeMap,
+    double* lhs_local,
+    double* rhs_local,
+    int length
+  );
   void apply_dirichlet();
   void solve_matrix_equation();
   void update_field();
+  void reset_global();
 
   const std::string meshName_;
   const int order_;
   const bool outputTiming_;
+  int numRuns_;
+  double totalTime_;
+  double timeSetup_;
+  double timeAssembly_;
+  double timeSolveAndUpdate_;
   double timeMainLoop_;
   double timeMetric_;
   double timeLHS_;
