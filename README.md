@@ -1,2 +1,2 @@
-# NaluUnit
-Unit test harness for the NaluCFD/Nalu product
+# NaluSandBox
+SandBox location for the NaluCFD/Nalu product

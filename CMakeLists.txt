@@ -1,6 +1,6 @@
 #
 #	This is the top level CMakeLists.txt file
-#	It should be located within master/nalu/unit
+#	It should be located within master/NaluSandBox
 #	But not in the BUILD folder itself
 #
 ###########################################################################################################
@@ -45,12 +45,12 @@ MESSAGE("   Trilinos_CXX_COMPILER_FLAGS = ${Trilinos_CXX_COMPILER_FLAGS}")
 MESSAGE("End of Trilinos details\n")
 
 # Optional Installation helpers
-SET (INSTALL_NALU_UNIT FALSE)
+SET (INSTALL_NALU_SAND_BOX FALSE)
 IF (ENABLE_INSTALL)
-    SET (INSTALL_NALU_UNIT TRUE)
+    SET (INSTALL_NALU_SAND_BOX TRUE)
 ENDIF()
 
-IF (INSTALL_NALU_UNIT)
+IF (INSTALL_NALU_SAND_BOX)
   set(BINARY_INSTALL_DIR bin)
   set(INCLUDE_INSTALL_DIR include)
   set(LIB_INSTALL_DIR lib)
@@ -76,7 +76,7 @@ ELSE(Trilinos_BUILD_SHARED_LIBS)
   SET(Nalu_Unit_LIBRARY_TYPE STATIC)
 ENDIF(Trilinos_BUILD_SHARED_LIBS)
 
-#######################################     NALU_UNIT     ##########################
+#######################################     NALU_SAND_BOX     ##########################
 
 PROJECT(Nalu_Unit)
 
@@ -89,17 +89,17 @@ file (GLOB SOURCE src/*.C src/*/*.C src/*/*/*.C src/*/*.F)
 file (GLOB HEADER include/*.h include/*/*.h include/*/*/*.h)
 
 include_directories (${CMAKE_SOURCE_DIR}/include)
-add_library (nalu_unit ${SOURCE} ${HEADER})
-target_link_libraries(nalu_unit ${Trilinos_LIBRARIES})
+add_library (nalu_sand_box ${SOURCE} ${HEADER})
+target_link_libraries(nalu_sand_box ${Trilinos_LIBRARIES})
 
-set(nalu_unit_ex_name "naluUnitX")
+set(nalu_sand_box_ex_name "naluSandBoxX")
 message("CMAKE_BUILD_TYPE = ${CMAKE_BUILD_TYPE}")
 if (CMAKE_BUILD_TYPE STREQUAL "DEBUG")
-   set (nalu_unit_ex_name "naluUnitXd")
+   set (nalu_sand_box_ex_name "naluSandBoxXd")
    add_definitions("-Wall -Werror")
    message("Debug Build")
 endif()
 
-add_executable(${nalu_unit_ex_name} naluUnit.C)
-target_link_libraries(${nalu_unit_ex_name} nalu_unit)
+add_executable(${nalu_sand_box_ex_name} naluSandBox.C)
+target_link_libraries(${nalu_sand_box_ex_name} nalu_sand_box)
 MESSAGE("\nAnd CMake says...:")
