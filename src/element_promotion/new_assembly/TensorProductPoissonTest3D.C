@@ -4,14 +4,16 @@
 /*  in the file, LICENSE, which is located in the top-level NaluUnit      */
 /*  directory structure                                                   */
 /*------------------------------------------------------------------------*/
-#include <element_promotion/new_assembly/TensorProductPoissonTest.h>
+#include <element_promotion/new_assembly/TensorProductPoissonTest3D.h>
 
 #include <NaluEnv.h>
 #include <element_promotion/ElementDescription.h>
 #include <element_promotion/MasterElement.h>
 #include <element_promotion/MasterElementHO.h>
 #include <element_promotion/new_assembly/HighOrderLaplacianQuad.h>
+#include <element_promotion/new_assembly/HighOrderLaplacianHex.h>
 #include <element_promotion/new_assembly/HighOrderGeometryQuad.h>
+#include <element_promotion/new_assembly/HighOrderGeometryHex.h>
 #include <element_promotion/PromoteElement.h>
 #include <element_promotion/PromotedPartHelper.h>
 #include <element_promotion/PromotedElementIO.h>
@@ -49,23 +51,29 @@
 #include <stdexcept>
 #include <chrono>
 
+#define POLYORDER 12
+
 namespace sierra{
 namespace naluUnit{
 
   using clock_type = std::chrono::high_resolution_clock;
+  inline double get_duration(clock_type::time_point end, clock_type::time_point begin)
+  {
+    return (1.0e-9*std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count());
+  }
 
 //==========================================================================
 // Class Definition
 //==========================================================================
-//TensorProductPoissonTest - Use a four high-order elements to solve
+//TensorProductPoissonTest3D - Use a four high-order elements to solveq
 // the "heat conduction MMS" to effectively floating point precision
 //==========================================================================
-TensorProductPoissonTest::TensorProductPoissonTest(
+TensorProductPoissonTest3D::TensorProductPoissonTest3D(
   std::string meshName,
   int order,
   bool printTiming)
   : meshName_(std::move(meshName)),
-    order_(order),
+    order_(POLYORDER),
     outputTiming_(true),
     totalTime_(0.0),
     timeSetup_(0.0),
@@ -85,15 +93,10 @@ TensorProductPoissonTest::TensorProductPoissonTest(
   // Nothing
 }
 //--------------------------------------------------------------------------
-TensorProductPoissonTest::~TensorProductPoissonTest() = default;
-//--------------------------------------------------------------------------
-inline double get_duration(clock_type::time_point end, clock_type::time_point begin)
-{
-  return (1.0e-9*std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count());
-}
+TensorProductPoissonTest3D::~TensorProductPoissonTest3D() = default;
 //--------------------------------------------------------------------------
 void
-TensorProductPoissonTest::execute()
+TensorProductPoissonTest3D::execute()
 {
   if (NaluEnv::self().pSize_ > 1) { return; }   // test is serial
 
@@ -105,7 +108,7 @@ TensorProductPoissonTest::execute()
   initialize_matrix();
 
   auto timeAssemblyStart = clock_type::now();
-  numRuns_ = outputTiming_ ? 1000 : 1; // number of runs for averaging timing data
+  numRuns_ = outputTiming_ ? 1 : 1; // number of runs for averaging timing data
   for (int j = 0; j < numRuns_; ++j) {
     lhs_.putScalar(0.0); rhs_.putScalar(0.0);
     assemble_poisson(order_);
@@ -132,28 +135,25 @@ struct MMSFunction {
     return ( -(k*pi)*(k*pi) * (std::cos(2.0*k*pi*x) + std::cos(2.0*k*pi*y)) );
   };
 
+  double exact_solution(double x, double y, double z) {
+    return (0.25*(std::cos(2.0*k*pi*x) + std::cos(2.0*k*pi*y) + std::cos(2.0*k*pi*z)));
+  }
+
+  double exact_laplacian(double x, double y, double z) const
+  {
+    return ( -(k*pi)*(k*pi) * (std::cos(2.0*k*pi*x) + std::cos(2.0*k*pi*y) + std::cos(2.0*k*pi*z)) );
+  };
+
+
+
   double k;
   double pi;
 };
 //--------------------------------------------------------------------------
 void
-TensorProductPoissonTest::assemble_poisson(unsigned pOrder)
+TensorProductPoissonTest3D::assemble_poisson(unsigned pOrder)
 {
-  switch (pOrder)
-  {
-    case  1: assemble_poisson< 1>(); break;
-    case  2: assemble_poisson< 2>(); break;
-    case  3: assemble_poisson< 3>(); break;
-    case  4: assemble_poisson< 4>(); break;
-    case  5: assemble_poisson< 5>(); break;
-    case  6: assemble_poisson< 6>(); break;
-    case  7: assemble_poisson< 7>(); break;
-    case  8: assemble_poisson< 8>(); break;
-    case  9: assemble_poisson< 9>(); break;
-    case 10: assemble_poisson<10>(); break;
-    case 15: assemble_poisson<15>(); break;
-    default: throw std::runtime_error("Sorry, order " + std::to_string(pOrder) + " is not supported");
-  }
+  assemble_poisson<HexViews<POLYORDER>>();
 }
 //--------------------------------------------------------------------------
 template <typename TopoView>
@@ -178,50 +178,61 @@ typename TopoView::connectivity_array
 copy_node_map_to_topo_view(Container& map)
 {
   typename TopoView::connectivity_array nodeMap("nmap");
-  for (unsigned j = 0; j < TopoView::nodes1D; ++j) {
-    for (unsigned i = 0; i < TopoView::nodes1D; ++i) {
-      nodeMap(j,i) = map[TopoView::nodes1D * j + i];
-    }
+  auto* p_nmap = nodeMap.ptr_on_device();
+  for (unsigned j = 0; j < TopoView::nodesPerElement; ++j) {
+    p_nmap[j] = map[j];
   }
   return nodeMap;
 }
 //--------------------------------------------------------------------------
-template <unsigned poly_order> void
-TensorProductPoissonTest::assemble_poisson()
+template <typename TopoView> void
+TensorProductPoissonTest3D::assemble_poisson()
 {
   // Poisson equation assembly algorithm for quadrilateral elements
-
   // Kokkos array views for this algorithm
-  using TopoView = QuadViews<poly_order>;
-  auto mat = CoefficientMatrices<poly_order>();
+
+  auto mat = CoefficientMatrices<TopoView::poly_order>();
   auto nodeMap = copy_node_map_to_topo_view<TopoView>(elem_->nodeMap);
-  auto selector = stk::mesh::selectUnion(superPartVector_);
-  const auto& buckets = filter_buckets<TopoView>(bulkData_->get_buckets(stk::topology::ELEMENT_RANK, selector));
 
   typename TopoView::nodal_vector_array coordinates("element nodal coordinates");
   typename TopoView::nodal_scalar_array scalar("scalar field data");
   typename TopoView::nodal_scalar_array nodalSource("nodal source field");
-  typename TopoView::scs_tensor_array metric_laplace("A^T J^-1");
+  typename TopoView::scs_tensor_array metricLaplace("A^T J^-1");
   typename TopoView::matrix_array lhs("lhs");
   typename TopoView::nodal_scalar_array rhs("rhs");
-  typename TopoView::nodal_scalar_array metric_vol("|J|");
+  typename TopoView::nodal_scalar_array metricVolume("|J|");
+
+  auto selector = stk::mesh::selectUnion(superPartVector_) & metaData_->locally_owned_part();
+  const auto& buckets = filter_buckets<TopoView>(bulkData_->get_buckets(stk::topology::ELEMENT_RANK, selector));
+
+  //HACK: rotate parent element so tensor-product ordinal 0 is at bottom-left corner.
+  double Q[] = {
+      +0, +1, +0,
+      +0, +0, +1,
+      +1, +0, +0
+  };
 
   auto timeMainStart = clock_type::now();
   for (const auto* ib : buckets) {
     for (size_t k = 0; k < ib->size(); ++k) {
       auto timeGatherStart = clock_type::now();
       const auto* node_rels = ib->begin_nodes(k);
-      for (unsigned j = 0; j <TopoView::nodes1D; ++j) {
-        for (unsigned i = 0; i < TopoView::nodes1D; ++i) {
-          stk::mesh::Entity node = node_rels[nodeMap(j,i)];
-          scalar(j, i) = *stk::mesh::field_data(*q_, node);
-          nodalSource(j, i) = *stk::mesh::field_data(*source_, node);
-          const double * coords = stk::mesh::field_data(*coordinates_, node);
-          for (unsigned k = 0; k < TopoView::dim; ++k) {
-            coordinates(k, j, i) = coords[k];
+
+      for (unsigned k = 0; k < TopoView::nodes1D; ++k) {
+        for (unsigned j = 0; j < TopoView::nodes1D; ++j) {
+          for (unsigned i = 0; i < TopoView::nodes1D; ++i) {
+            const stk::mesh::Entity node = node_rels[nodeMap(k,j,i)];
+            scalar(k,j,i) = *stk::mesh::field_data(*q_, node);
+            nodalSource(k,j,i) = *stk::mesh::field_data(*source_, node);
+
+            const double* coords = stk::mesh::field_data(*coordinates_, node);
+            coordinates(0, k,j,i) = Q[0] * coords[0] + Q[1] * coords[1] + Q[2] * coords[2];
+            coordinates(1, k,j,i) = Q[3] * coords[0] + Q[4] * coords[1] + Q[5] * coords[2];
+            coordinates(2, k,j,i) = Q[6] * coords[0] + Q[7] * coords[1] + Q[8] * coords[2];
           }
         }
       }
+
       timeGather_ += get_duration(clock_type::now(), timeGatherStart);
 
       Kokkos::deep_copy(lhs, 0.0);
@@ -229,27 +240,27 @@ TensorProductPoissonTest::assemble_poisson()
 
       // compute the metric for this element
       auto timeMetricStart = clock_type::now();
-      HighOrderMetrics::compute_diffusion_metric_linear(mat, coordinates, metric_laplace);
+      HighOrderMetrics::compute_diffusion_metric(mat, coordinates, metricLaplace);
       timeMetric_ += get_duration(clock_type::now(), timeMetricStart);
 
       // compute left-hand side
       auto timeLHSStart = clock_type::now();
-      TensorAssembly::add_elemental_laplacian_matrix(mat, metric_laplace, lhs);
+      TensorAssembly::add_elemental_laplacian_matrix(mat, metricLaplace, lhs, scalar, rhs);
       timeLHS_ += get_duration(clock_type::now(), timeLHSStart);
 
       // compute action of left-hand side and subtract from rhs to form residual
-      auto timeRHSStart = clock_type::now();
-      TensorAssembly::add_elemental_laplacian_action(mat, metric_laplace, scalar, rhs);
-      timeResidual_ += get_duration(clock_type::now(), timeRHSStart);
+//      auto timeRHSStart = clock_type::now();
+//      TensorAssembly::add_elemental_laplacian_action(mat, metricLaplace, scalar, rhs);
+//      timeResidual_ += get_duration(clock_type::now(), timeRHSStart);
 
       // compute source term metric (det J)
       auto timeVolumeMetricStart = clock_type::now();
-      HighOrderMetrics::compute_volume_metric_linear(mat, coordinates, metric_vol);
+      HighOrderMetrics::compute_volume_metric(mat, coordinates, metricVolume);
       timeVolumeMetric_ += get_duration(clock_type::now(), timeVolumeMetricStart);
 
       // compute volumetric source and add to rhs
       auto timeVolumeSourceStart = clock_type::now();
-      TensorAssembly::add_volumetric_source(mat, metric_vol, nodalSource, rhs);
+      TensorAssembly::add_volumetric_source(mat, metricVolume, nodalSource, rhs);
       timeVolumeSource_ += get_duration(clock_type::now(), timeVolumeSourceStart);
 
       // sum into the global matrix -- not timed since this is only to check correctness
@@ -262,10 +273,10 @@ TensorProductPoissonTest::assemble_poisson()
 }
 //--------------------------------------------------------------------------
 void
-TensorProductPoissonTest::update_field()
+TensorProductPoissonTest3D::update_field()
 {
   // update element boundaries
-  auto selector =  stk::mesh::selectUnion(superPartVector_);
+  auto selector = stk::mesh::selectUnion(superPartVector_);
   const auto& node_buckets = bulkData_->get_buckets(stk::topology::NODE_RANK, selector);
 
   for (const auto* ib : node_buckets) {
@@ -279,7 +290,7 @@ TensorProductPoissonTest::update_field()
 }
 //--------------------------------------------------------------------------
 bool
-TensorProductPoissonTest::check_solution()
+TensorProductPoissonTest3D::check_solution()
 {
   double maxError = -1.0;
   const auto& node_buckets = bulkData_->get_buckets(stk::topology::NODE_RANK,
@@ -317,7 +328,7 @@ TensorProductPoissonTest::check_solution()
 }
 //--------------------------------------------------------------------------
 void
-TensorProductPoissonTest::setup_mesh()
+TensorProductPoissonTest3D::setup_mesh()
 {
   stk::ParallelMachine pm = NaluEnv::self().parallel_comm();
 
@@ -331,7 +342,6 @@ TensorProductPoissonTest::setup_mesh()
   ioBroker_->add_mesh_database(meshName_, stk::io::READ_MESH);
   ioBroker_->create_input_mesh();
 
-  ThrowRequireMsg(metaData_->spatial_dimension() == 2, "Only 2D for now");
   elem_ = ElementDescription::create(metaData_->spatial_dimension(), order_, "SGL", true);
   ThrowRequire(elem_.get() != nullptr);
 
@@ -343,7 +353,7 @@ TensorProductPoissonTest::setup_mesh()
 
   // perturb coordinates before promotion, so promoted mesh is not-curved
   if (randomlyPerturbCoordinates_) {
-    perturb_coordinates(0.125, 0.1);
+    //perturb_coordinates(0.125, 0.1);
   }
 
   bulkData_->modification_begin();
@@ -356,7 +366,7 @@ TensorProductPoissonTest::setup_mesh()
 }
 //--------------------------------------------------------------------------
 void
-TensorProductPoissonTest::initialize_matrix()
+TensorProductPoissonTest3D::initialize_matrix()
 {
   // count interior nodes
   const auto& node_buckets =
@@ -369,8 +379,7 @@ TensorProductPoissonTest::initialize_matrix()
   size_t nodeNumber = 0;
   for (const auto ib : node_buckets ) {
     const auto& b = *ib ;
-    const auto length   = b.size();
-    for ( size_t k = 0 ; k < length ; ++k ) {
+    for ( size_t k = 0 ; k < b.size() ; ++k ) {
       rowMap_.insert({b[k], nodeNumber});
       ++nodeNumber;
     }
@@ -385,7 +394,7 @@ TensorProductPoissonTest::initialize_matrix()
 }
 //--------------------------------------------------------------------------
 void
-TensorProductPoissonTest::apply_dirichlet()
+TensorProductPoissonTest3D::apply_dirichlet()
 {
   int dim = metaData_->spatial_dimension();
   int numNodes = rowMap_.size();
@@ -404,13 +413,19 @@ TensorProductPoissonTest::apply_dirichlet()
         lhs_(index, i) = 0.0;
       }
       lhs_(index, index) = 1.0;
-      rhs_(index) = func.exact_solution(coords[k*dim + 0 ], coords[k*dim+1]) - q[k];
+
+      if (dim == 3) {
+        rhs_(index) = func.exact_solution(coords[k*dim + 0 ], coords[k*dim+1], coords[k*dim+2]) - q[k];
+      }
+      else {
+        rhs_(index) = func.exact_solution(coords[k*dim + 0 ], coords[k*dim+1]) - q[k];
+      }
     }
   }
 }
 //--------------------------------------------------------------------------
 void
-TensorProductPoissonTest::solve_matrix_equation()
+TensorProductPoissonTest3D::solve_matrix_equation()
 {
   Teuchos::SerialDenseSolver<int,double> solver;
   solver.setMatrix(Teuchos::rcp(&lhs_,false));
@@ -420,7 +435,7 @@ TensorProductPoissonTest::solve_matrix_equation()
 }
 //--------------------------------------------------------------------------
 void
-TensorProductPoissonTest::sum_into_global(
+TensorProductPoissonTest3D::sum_into_global(
   const stk::mesh::Entity* node_rels,
   const unsigned* nodeMap,
   double* lhs_local,
@@ -432,13 +447,13 @@ TensorProductPoissonTest::sum_into_global(
     rhs_(idj) += rhs_local[j];
     for (int i = 0; i < length; ++i) {
       auto idi = rowMap_.at(node_rels[nodeMap[i]]);
-      lhs_(idj, idi) += lhs_local[i + length * j];
+      lhs_(idj, idi) += lhs_local[length * j + i];
     }
   }
 }
 //--------------------------------------------------------------------------
 void
-TensorProductPoissonTest::output_banner()
+TensorProductPoissonTest3D::output_banner()
 {
   std::string elemType;
   if(metaData_->spatial_dimension() == 2) {
@@ -460,7 +475,7 @@ TensorProductPoissonTest::output_banner()
 }
 //--------------------------------------------------------------------------
 void
-TensorProductPoissonTest::register_fields()
+TensorProductPoissonTest3D::register_fields()
 {
   coordinates_ =  &(metaData_-> declare_field<VectorFieldType>(stk::topology::NODE_RANK, "coordinates"));
   q_ = &(metaData_-> declare_field<ScalarFieldType>(stk::topology::NODE_RANK, "scalar"));
@@ -475,7 +490,7 @@ TensorProductPoissonTest::register_fields()
 }
 //--------------------------------------------------------------------------
 void
-TensorProductPoissonTest::setup_super_parts()
+TensorProductPoissonTest3D::setup_super_parts()
 {
   originalPartVector_ = metaData_->get_mesh_parts();
   for (auto* targetPart : originalPartVector_) {
@@ -509,7 +524,7 @@ TensorProductPoissonTest::setup_super_parts()
 }
 //--------------------------------------------------------------------------
 void
-TensorProductPoissonTest::set_output_fields()
+TensorProductPoissonTest3D::set_output_fields()
 {
   promoteIO_ = make_unique<PromotedElementIO>(
     *elem_,
@@ -522,10 +537,9 @@ TensorProductPoissonTest::set_output_fields()
 }
 //--------------------------------------------------------------------------
 void
-TensorProductPoissonTest::perturb_coordinates(double elem_size, double fac)
+TensorProductPoissonTest3D::perturb_coordinates(double elem_size, double fac)
 {
   std::mt19937 rng;
-  rng.seed(std::random_device()());
   std::uniform_real_distribution<double> coeff(-fac*elem_size, fac*elem_size);
 
   auto selector = stk::mesh::selectUnion(originalPartVector_);
@@ -535,15 +549,13 @@ TensorProductPoissonTest::perturb_coordinates(double elem_size, double fac)
   for (const auto ib : node_buckets ) {
     double* coords = stk::mesh::field_data(*coordinates_, *ib);
     for ( size_t k = 0 ; k < ib->size() ; ++k ) {
-      for (int j = 0; j < dim; ++j) {
-        coords[k * dim + j] += coeff(rng);
-      }
+      for (int j = 0; j < dim; ++j) { coords[k * dim + j] += coeff(rng); }
     }
   }
 }
 //--------------------------------------------------------------------------
 void
-TensorProductPoissonTest::initialize_fields()
+TensorProductPoissonTest3D::initialize_fields()
 {
   std::mt19937 rng;
   rng.seed(std::random_device()());
@@ -561,15 +573,22 @@ TensorProductPoissonTest::initialize_fields()
     double* source = stk::mesh::field_data(*source_, b);
     double* coords = stk::mesh::field_data(*coordinates_, b);
     for ( size_t k = 0 ; k < length ; ++k ) {
-      q[k] = coeff(rng);
-      qExact[k] = func.exact_solution(coords[k*dim+0], coords[k*dim+1]);
-      source[k] = -func.exact_laplacian(coords[k*dim+0], coords[k*dim+1]);
+      q[k] = 0.0;
+
+      if (dim == 3) {
+        qExact[k] = func.exact_solution(coords[k*dim+0], coords[k*dim+1], coords[k*dim+2]);
+        source[k] = -func.exact_laplacian(coords[k*dim+0], coords[k*dim+1], coords[k*dim+2]);
+      }
+      else {
+        qExact[k] = func.exact_solution(coords[k*dim+0], coords[k*dim+1]);
+        source[k] = -func.exact_laplacian(coords[k*dim+0], coords[k*dim+1]);
+      }
     }
   }
 }
 //--------------------------------------------------------------------------
 void
-TensorProductPoissonTest::output_results()
+TensorProductPoissonTest3D::output_results()
 {
   if (outputTiming_) {
     // average time

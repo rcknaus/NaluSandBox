@@ -14,6 +14,8 @@
 #include <element_promotion/PromoteElementRestartTest.h>
 #include <element_promotion/HighOrderPoissonTest.h>
 #include <element_promotion/new_assembly/TensorProductPoissonTest.h>
+#include <element_promotion/new_assembly/TensorProductPoissonTest3D.h>
+#include <element_promotion/new_assembly/HighOrderOperatorsTest.h>
 #include <mpi.h>
 #include <overset/Overset.h>
 #include <surfaceFields/SurfaceFields.h>
@@ -104,6 +106,7 @@ int main( int argc, char ** argv )
   // Elem promotion unit test options
 
   const bool doQuadrature = true;
+  const bool doHighOrderOperatorsHex = true;
   const bool doMasterElementQuad = true;
   const bool doMasterElementHex= true;
   const bool doPromotionQuadGaussLegendre = true;
@@ -113,6 +116,7 @@ int main( int argc, char ** argv )
   const bool doQuadPoissonSGL = true && naluEnv.parallel_size() == 1; // serial test
   const bool doHexPoissonSGL = true && naluEnv.parallel_size() == 1; // serial test
   const bool doQuadTensorProductPoisson = true && naluEnv.parallel_size() == 1; //serial test
+  const bool doHexTensorProductPoisson = true && naluEnv.parallel_size() == 1; //serial test
   const bool doRestartQuad = true;
   const bool doRestartHex = true;
 
@@ -132,6 +136,10 @@ int main( int argc, char ** argv )
 
   if ( doQuadrature ) {
     sierra::naluUnit::QuadratureRuleTest().execute();
+  }
+
+  if (doHighOrderOperatorsHex) {
+    sierra::naluUnit::HighOrderOperatorsHexTest().execute();
   }
 
   if ( doMasterElementQuad ) {
@@ -175,6 +183,13 @@ int main( int argc, char ** argv )
     bool printTiming = true;
     sierra::naluUnit::TensorProductPoissonTest("test_meshes/tquad4_4.g", polyOrder, printTiming).execute();
   }
+
+  if ( doHexTensorProductPoisson ) {
+    int polyOrder = 12;
+    bool printTiming = true;
+    sierra::naluUnit::TensorProductPoissonTest3D("test_meshes/hex8_1.g", polyOrder, printTiming).execute();
+  }
+
 
   if ( doQuadPoissonSGL  ) {
     sierra::naluUnit::HighOrderPoissonTest("test_meshes/quad4_2.g").execute();

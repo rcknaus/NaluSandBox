@@ -4,8 +4,8 @@
 /*  in the file, LICENSE, which is located in the top-level NaluUnit      */
 /*  directory structure                                                   */
 /*------------------------------------------------------------------------*/
-#ifndef HighOrderOperators_h
-#define HighOrderOperators_h
+#ifndef HighOrderOperatorsQuad_h
+#define HighOrderOperatorsQuad_h
 
 #include <element_promotion/new_assembly/CoefficientMatrices.h>
 #include <TopologyViews.h>
@@ -15,7 +15,7 @@ namespace sierra {
 namespace naluUnit {
 namespace HighOrderOperators {
   namespace QuadInternal {
-    void mxm(
+    inline void mxm(
       Teuchos::ETransp transA,
       Teuchos::ETransp transB,
       int n,
@@ -57,7 +57,7 @@ namespace HighOrderOperators {
     void Dy_xhat(const double* scsInterp, const double* nodalDeriv, const double* in, double* out)
     {
       // computes yhat-derivative at scs of constant xhat coordinate
-      typename QuadViews<poly_order>::nodal_scalar_array temp("temp");
+      typename QuadViews<poly_order>::nodal_scalar_array temp("");
       mxm(Teuchos::TRANS   , Teuchos::NO_TRANS, poly_order+1, 1.0, in, scsInterp, 0.0, temp.data());
       mxm(Teuchos::TRANS   , Teuchos::NO_TRANS, poly_order+1, 1.0, nodalDeriv, temp.data(), 0.0, out);
     }
@@ -66,7 +66,7 @@ namespace HighOrderOperators {
     void Dx_yhat(const double* scsInterp, const double* nodalDeriv, const double* in, double* out)
     {
       // computes xhat-derivative at scs of constant yhat coordinate
-      typename QuadViews<poly_order>::nodal_scalar_array temp("temp");
+      typename QuadViews<poly_order>::nodal_scalar_array temp("");
       mxm(Teuchos::NO_TRANS, Teuchos::NO_TRANS, poly_order+1, 1.0, in, scsInterp, 0.0, temp.data());
       mxm(Teuchos::TRANS   , Teuchos::NO_TRANS, poly_order+1, 1.0, nodalDeriv, temp.data(), 0.0, out);
     }
@@ -183,7 +183,7 @@ namespace HighOrderOperators {
     typename QuadViews<poly_order>::nodal_scalar_array& f_bar)
   {
     // computes volume integral along 2D volumes (e.g. "scv" in 2D)
-    typename QuadViews<poly_order>::nodal_scalar_array temp("temp");
+    typename QuadViews<poly_order>::nodal_scalar_array temp("");
     QuadInternal::mxm(Teuchos::NO_TRANS, Teuchos::NO_TRANS, poly_order +1, 1.0,  &f(0,0), nodalWeights.data(),    0.0, temp.data());
     QuadInternal::mxm(Teuchos::TRANS   , Teuchos::NO_TRANS, poly_order +1, 1.0, nodalWeights.data(), temp.data(), 1.0, &f_bar(0,0));
   }

@@ -52,7 +52,7 @@ struct QuadViews
   constexpr static int dim = 2;
   constexpr static int nodesPerElement = nodes1D * nodes1D;
   using real_type = double;
-  using connectivity_type = int;
+  using connectivity_type = unsigned;
 
   using matrix_array = Kokkos::View<real_type[nodesPerElement][nodesPerElement]>;
 
@@ -77,7 +77,7 @@ struct HexViews
   constexpr static int dim = 3;
   constexpr static int nodesPerElement = nodes1D * nodes1D * nodes1D;
   using real_type = double;
-  using connectivity_type = int;
+  using connectivity_type = unsigned;
 
   using matrix_array = Kokkos::View<real_type[nodesPerElement][nodesPerElement]>;
 
@@ -92,6 +92,8 @@ struct HexViews
   using scs_scalar_array = Kokkos::View<real_type[p][nodes1D]>;
   using scs_vector_array = Kokkos::View<real_type[dim][p][nodes1D][nodes1D]>;
   using scs_tensor_array = Kokkos::View<real_type[dim][dim][p][nodes1D][nodes1D]>;
+
+  using tensor_array = Kokkos::View<real_type[dim][dim]>;
 };
 
 

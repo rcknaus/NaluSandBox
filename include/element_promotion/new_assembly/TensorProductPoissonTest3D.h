@@ -4,8 +4,8 @@
 /*  in the file, LICENSE, which is located in the top-level NaluUnit      */
 /*  directory structure                                                   */
 /*------------------------------------------------------------------------*/
-#ifndef TensorProductPoissonTest_h
-#define TensorProductPoissonTest_h
+#ifndef TensorProductPoissonTest3D_h
+#define TensorProductPoissonTest3D_h
 
 #include <stk_mesh/base/Field.hpp>
 #include <stk_mesh/base/CoordinateSystems.hpp>
@@ -52,15 +52,15 @@ namespace stk {
 namespace sierra {
 namespace naluUnit {
 
-class TensorProductPoissonTest
+class TensorProductPoissonTest3D
 {
 public:
   // constructor/destructor
- TensorProductPoissonTest(
-   std::string meshName = "test_meshes/tquad4_4.g",
+ TensorProductPoissonTest3D(
+   std::string meshName = "test_meshes/hex8_2.g",
    int order = 10,
    bool printTiming = true);
- ~TensorProductPoissonTest();
+ ~TensorProductPoissonTest3D();
 
   void execute();
 private:
@@ -76,7 +76,7 @@ private:
   bool check_solution();
   void initialize_matrix();
   void assemble_poisson(unsigned pOrder);
-  template<unsigned poly_order> void assemble_poisson();
+  template<typename TopoView> void assemble_poisson();
   void sum_into_global(
     const stk::mesh::Entity* node_rels,
     const unsigned* nodeMap,

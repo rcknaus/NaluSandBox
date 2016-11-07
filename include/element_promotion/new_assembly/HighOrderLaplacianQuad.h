@@ -35,9 +35,7 @@ namespace TensorAssembly {
      */
     using TopoView = QuadViews<poly_order>;
 
-    static_assert (TopoView::dim == 2,"Only 2D implemented");
-
-    // flux past constant yhat lines
+    // flux past constant xhat lines
     for (int n = 0; n < TopoView::nodes1D; ++n) {
       // x- element boundary
       constexpr int m_minus = 0;
@@ -93,7 +91,7 @@ namespace TensorAssembly {
       }
     }
 
-    // flux past constant xhat lines
+    // flux past constant yhat lines
     for (int m = 0; m < TopoView::nodes1D; ++m) {
       // y+ boundary
       constexpr int n_minus = 0;
@@ -165,7 +163,7 @@ namespace TensorAssembly {
     using TopoView = QuadViews<poly_order>;
 
     // gradient at constant xhat surfaces
-    typename TopoView::nodal_vector_array grad_phi("gp");
+    typename TopoView::nodal_vector_array grad_phi("");
     HighOrderOperators::scs_xhat_grad<poly_order>(mat.scsInterp, mat.scsDeriv, mat.nodalDeriv, scalar, grad_phi);
 
     // apply metric transformation
